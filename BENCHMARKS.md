@@ -65,12 +65,16 @@ residual trust requirement.
 
 ## Cluster facts established while benchmarking
 
-1. **Login-node caps are enforced for ordinary users, and staff are exempt.** On `login2.hive`,
+1. **Login-node caps are enforced for ordinary users, and `hpccfgrp` members are exempt.** PAM runs
+   `/etc/security/systemd-user-limits.sh` on session open (`/etc/pam.d/common-session`). It skips
+   UID < 1000; for members of **`hpccfgrp`** it *deletes*
+   `/etc/systemd/system.control/user-<uid>.slice.d/*.conf`; for everyone else it applies
+   `CPUQuota=200% MemoryMax=7.5% MemorySwapMax=500M TasksMax=512`. Observed on `login2.hive`:
    91 of 94 user slices carry `cpu.max="200000 100000"` (2 CPUs), `memory.max=20275437568`
-   (18.88 GiB, exactly 7.50% of the node's 251.8 GiB) and `pids.max=512`, with `nofile 16384` from
-   `/etc/security/limits.d/slurm.conf` — precisely the documented figures. Accounts in
-   `sudo-users`/`root-ssh-users` are uncapped. An agent running as staff that measures its own
-   cgroup will conclude, wrongly, that no limits exist.
+   (18.88 GiB = exactly 7.50% of the node's 251.8 GiB) and `pids.max=512`; `nofile 16384` comes
+   separately from `/etc/security/limits.d/slurm.conf` and applies to everyone. So the applicability
+   test is `id -nG | grep -qw hpccfgrp`, not an inspection of your own cgroup — an agent running as
+   staff sees `infinity` everywhere and will otherwise conclude, wrongly, that no limits exist.
 2. **`sbatch --test-only`'s "to start at" time is not a wait estimate.** `-c 1`, `8`, `16`, `32`
    and `48` all returned the identical `2026-09-09T16:08:51` while `high` had 1551 idle CPUs. It is
    a scheduler-cycle artifact. Real queue-health probes: `sinfo -p PART -h -o "%C"` and

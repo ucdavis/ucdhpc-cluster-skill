@@ -65,6 +65,8 @@ T scontrol show reservation | awk '/ReservationName/{n=$1} /StartTime/{print n, 
 
 # --- partitions ----------------------------------------------------------------
 hr "partitions: max time, default mem per CPU, preemption, nodes alloc/idle/other/total, GPUs"
+echo "node counts are PER PARTITION; most nodes belong to several, so the column does not sum to"
+echo "the cluster size (see the distinct-node total further down)."
 printf '%-20s %-12s %-10s %-10s %-16s %s\n' PARTITION MAXTIME DEFMEM/CPU PREEMPT NODES_A/I/O/T GRES_TYPES
 for p in $(T sinfo -h -o "%R" | sort -u); do
   info=$(T scontrol show partition "$p")
@@ -76,12 +78,28 @@ for p in $(T sinfo -h -o "%R" | sort -u); do
   printf '%-20s %-12s %-10s %-10s %-16s %s\n' "$p" "${mt:-?}" "${dm:+${dm}M}" "${pm:-?}" "${nodes:-?}" "${gres:--}"
 done
 
-hr "GPU inventory (sinfo GRES string | node count) — use --gpus=TYPE:N or --gpus=N"
+hr "GPU inventory (sinfo GRES string | distinct nodes) — use --gpus=TYPE:N or --gpus=N"
+# Summing %D is correct here ONLY because %P is absent from the format: sinfo then collapses the
+# per-partition rows, so each node is counted once even though most GPU nodes sit in both `low`
+# and an owner partition. Do not add %P to this format string without switching to the
+# node-name-deduplicated form used for node shapes below, or the counts will double.
 T sinfo -h -o "%G|%D" | grep -v '(null)' | sort | awk -F'|' '{a[$1]+=$2} END{for(k in a) print k"|"a[k]}' | sort | column -t -s'|'
 
 if [ "$BRIEF" = 0 ]; then
-  hr "node shapes (features | CPUs | RAM MB | count)"
-  T sinfo -h -N -o "%f|%c|%m" | sort | uniq -c | sort -rn | awk '{printf "%s x %s\n",$1,$2}' | head -15 | column -t -s'|'
+  hr "node shapes (distinct nodes x features | CPUs | RAM MB)"
+  # `sinfo -N` emits one row per node PER PARTITION, so a node in both `low` and `high` appears
+  # twice. Deduplicate on the node name (%N) before counting, otherwise every shared node is
+  # counted once per partition it belongs to.
+  shapes=$(T sinfo -h -N -o "%N|%f|%c|%m" | sort -u -t'|' -k1,1 | cut -d'|' -f2- | sort | uniq -c | sort -rn)
+  awk '{n=$1; $1=""; sub(/^ /,""); printf "%s x %s\n", n, $0}' <<<"$shapes" | head -15 | column -t -s'|'
+  total=$(awk '{s+=$1} END{print s+0}' <<<"$shapes")
+  shown=$(head -15 <<<"$shapes" | awk '{s+=$1} END{print s+0}')
+  rows=$(wc -l <<<"$shapes"); hidden=$(( rows > 15 ? rows - 15 : 0 ))
+  if [ "$hidden" -gt 0 ]; then
+    echo "  ($total distinct nodes total; $shown shown above, $((total-shown)) in $hidden further shape(s))"
+  else
+    echo "  ($total distinct nodes total)"
+  fi
 fi
 
 # --- the queue ------------------------------------------------------------------

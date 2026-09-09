@@ -85,4 +85,14 @@ residual trust requirement.
 5. **The site `.condarc` sets `create_default_packages: gcc=13`**, so every `conda create` silently
    pulls a GCC 13 toolchain. `conda create` accepts `--no-default-packages`; `mamba` 2.0.5 rejects it.
 
-Items 1, 2 and 5 are not yet reflected in the skill — see `ucd-hpc-workspace/NOTES.md`.
+Items 1 and 2 are now fixed in the skill (commit following the iteration-2 record); the caps are
+described as policy with the `hpccfgrp` exemption and `/etc/security/systemd-user-limits.sh` named
+as the authoritative source, and `lint-jobscript.sh` no longer prints the `--test-only` start time
+at all. Items 4 and 5 remain open — see `ucd-hpc-workspace/NOTES.md`.
+
+**The iteration-2 numbers describe the skill as it stood before those two fixes.** Re-running
+iteration 2 against the current skill would be expected to change nothing measurable: eval-6 passed
+7/7 in both configurations already, and neither fix targets the deep-find behaviour that produced
+the only delta. A future iteration wanting to measure them needs an eval where the scheduler is
+genuinely the slower option (to test the caps framing) and one where a run is tempted to report
+queue depth from `--test-only` (to test that fix).

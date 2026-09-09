@@ -142,8 +142,12 @@ cd "$SLURM_SUBMIT_DIR"
 - Useful variables: `SLURM_JOB_ID`, `SLURM_ARRAY_JOB_ID`, `SLURM_ARRAY_TASK_ID`,
   `SLURM_CPUS_PER_TASK`, `SLURM_NTASKS`, `SLURM_MEM_PER_NODE` (MB), `SLURM_SUBMIT_DIR`,
   `SLURM_JOB_NODELIST`, `TMPDIR` (per-job local scratch, see `storage.md`).
-- Validate without submitting: `sbatch --test-only script.sh`. Success prints an estimated start
-  time and node; failure prints the exact scheduler error.
+- Validate without submitting: `sbatch --test-only script.sh`. A rejection prints the exact
+  scheduler error, which is the point of the command. Its success line ("Job N to start at HH:MM
+  ... on nodes X") is **not a wait-time estimate** — the same timestamp comes back regardless of
+  how many CPUs you ask for, and it can be hours ahead while the partition is largely idle. For
+  queue health use `sinfo -p PART -h -o "%C"` and `squeue -t PD -h -o "%r" | sort | uniq -c`
+  (see `debugging.md`, *Is the queue actually busy?*).
 
 ## Job arrays
 

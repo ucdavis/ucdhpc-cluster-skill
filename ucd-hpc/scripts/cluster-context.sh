@@ -110,6 +110,26 @@ case "$CLUSTER" in
 esac
 echo "per-job local scratch: \$TMPDIR=/tmp (private, deleted at job end)"
 
+# --- login-node caps: do they apply to THIS account? --------------------------------
+hr "login-node caps (policy applies to everyone regardless; see SKILL.md)"
+LIMSH=/etc/security/systemd-user-limits.sh
+if id -nG 2>/dev/null | grep -qw hpccfgrp; then
+  echo "$USER is in hpccfgrp -> EXEMPT from the cgroup caps (the PAM script removes them)."
+  echo "  Do NOT read that as permission: the policy, and staff killing offending processes,"
+  echo "  apply anyway, and the users you are helping ARE capped."
+else
+  echo "$USER is not in hpccfgrp -> the per-user caps apply to this account."
+fi
+if [ -r "$LIMSH" ]; then
+  vals=$(grep -oE '(CPUQuota|MemoryMax|MemorySwapMax|TasksMax)=[^ \\]+' "$LIMSH" | paste -sd' ' -)
+  echo "  from $LIMSH: ${vals:-unparsed - read the file}"
+else
+  echo "  $LIMSH not readable here; documented values are 2 CPUs / 7.5% RAM / 500M swap / 512 procs"
+fi
+command -v systemctl >/dev/null 2>&1 && \
+  echo "  effective now: $(T systemctl show "user-$(id -u).slice" -p CPUQuotaPerSecUSec -p MemoryMax -p TasksMax | paste -sd' ' -)"
+echo "  open files: $(awk '/nofile/{print $4; exit}' /etc/security/limits.d/slurm.conf 2>/dev/null || ulimit -n) (from limits.d/slurm.conf; applies to everyone)"
+
 # --- software --------------------------------------------------------------------
 hr "software"
 if ! type module >/dev/null 2>&1 && [ -r /etc/profile.d/modules.sh ]; then

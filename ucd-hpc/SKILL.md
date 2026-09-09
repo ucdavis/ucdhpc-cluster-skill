@@ -15,10 +15,27 @@ cluster and which accounts the user actually has.
 ## Login-node discipline (applies to every command you run)
 
 You are almost always working on a **login node**, which is a shared front end for hundreds of
-people, not a workstation. Each user is capped at 2 CPUs (200%), 7.5% of RAM, 500 MB of swap,
-512 processes, and 16,384 open files, and staff will kill processes that degrade the node even
-when they are inside those limits. A login node that bogs down blocks everyone's ability to
-submit and monitor work, so the cost of a careless command is paid by the whole cluster.
+people, not a workstation. A login node that bogs down blocks everyone's ability to submit and
+monitor work, so the cost of a careless command is paid by the whole cluster, and staff will kill
+processes that degrade the node even when they are inside the limits.
+
+Ordinary users are capped, per user, at **2 CPUs (200%), 7.5% of RAM, 500 MB of swap and 512
+processes**, plus 16,384 open files. Those numbers are set by
+`/etc/security/systemd-user-limits.sh`, which PAM runs at every login; read that script for the
+current values rather than trusting this list, and `/etc/security/limits.d/slurm.conf` for the
+open-file limit.
+
+**The one exemption: members of `hpccfgrp` (HPCCF staff) get no caps at all** — the same script
+deletes any limits that were applied to them. So `id -nG | grep -qw hpccfgrp` tells you whether
+the caps apply to the account you are running as.
+
+This matters because of a trap: **never infer the policy from your own cgroup limits.** An agent
+running as staff that inspects `systemctl show user-$(id -u).slice` or `/sys/fs/cgroup/...` sees
+`infinity` everywhere and may conclude nothing would stop it from running work on the login node.
+That conclusion is wrong twice over — the caps are real for the people you are usually helping,
+and the policy (and staff killing offending processes) applies regardless of whether a cgroup
+would have stopped you. Being exempt from enforcement is not permission; it just means you can do
+more damage before anything intervenes.
 
 - **Never run the analysis on the login node.** Compiles, data crunching, conda solves for large
   environments, `apptainer build`, indexing a genome, anything that reads a lot of data or runs
@@ -104,6 +121,9 @@ the first time (assume they may not know Slurm). Prefer commands the user can re
 - Job scripts: run `scripts/lint-jobscript.sh FILE`. It checks for the common cluster-specific
   mistakes and then runs `sbatch --test-only FILE`, which asks the real scheduler whether the
   account/partition/QOS/limits accept the job without submitting it. Fix anything it flags.
+  **Read only the accept/reject, not the "to start at" time** — that timestamp is a scheduler
+  artifact, not a queue-wait estimate (see below), and mistaking it for one is how people talk
+  themselves into running work on the login node.
 - Failed or stuck jobs: run `scripts/job-postmortem.sh JOBID`. It pulls `sacct` and `scontrol`
   data, computes memory and CPU use against the request, finds the log files, greps them for
   the usual fatal messages, and states the likely cause.
@@ -144,6 +164,20 @@ the first time (assume they may not know Slurm). Prefer commands the user can re
   make the trailing-slash semantics explicit.
 - **Home is 20 GB** everywhere and is the usual cause of `Disk quota exceeded`. Conda
   environments, package caches, Apptainer caches, and pip caches belong on group storage.
+- **`sbatch --test-only` does not estimate the wait.** Its "Job N to start at HH:MM" is produced by
+  a scheduler pass, not a queue projection: the same timestamp comes back for a 1-CPU and a 48-CPU
+  request, and it can sit hours in the future while thousands of CPUs are idle. Use it only for
+  "does the scheduler accept this request". To answer "is the queue actually busy", ask directly:
+
+  ```bash
+  sinfo -p PARTITION -h -o "%C"                      # allocated/idle/other/total CPUs
+  squeue -t PD -h -o "%r" | sort | uniq -c | sort -rn # why pending jobs are pending
+  ```
+
+  Idle CPUs plus pending reasons that are all `QOSGrp*`, `Dependency` or `JobArrayTaskLimit` means
+  the queue is not backed up for *you* — those jobs are blocked by their own groups' limits, not
+  by a shortage. Telling a user "the queue is deep" on the strength of the `--test-only`
+  timestamp is a real failure mode; it is how "the queue here is always slow" gets started.
 - **Off-cluster or unverifiable?** Say what you could not check and give the exact command that
   checks it. Do not invent partition names, QOS limits, or module versions.
 

@@ -48,6 +48,28 @@ scontrol show job JOBID           # rich detail, only while Slurm still remember
 | `InvalidAccount`, `InvalidQOS` | association changed or expired | check `sacctmgr show assoc user=$USER` |
 | `Nodes required for job are DOWN, DRAINED or reserved` | cluster-wide capacity issue | wait; check MOTD / maintenance page |
 
+## Is the queue actually busy?
+
+Two commands answer this; `sbatch --test-only` does not.
+
+```bash
+sinfo -p PARTITION -h -o "%C"                        # allocated/idle/other/total CPUs
+squeue -t PD -h -o "%r" | sort | uniq -c | sort -rn  # the reasons pending jobs are pending
+```
+
+`sinfo`'s idle count is the capacity actually available now. The pending-reason histogram tells you
+whether the backlog is competition or bookkeeping: `Resources` and `Priority` mean real contention,
+while `QOSGrp*`, `Dependency`, `DependencyNeverSatisfied` and `JobArrayTaskLimit` mean those jobs
+are blocked by their own groups' limits or their own throttles and are not standing between you and
+a node.
+
+**`sbatch --test-only`'s "Job N to start at HH:MM" is not a wait estimate.** It is the result of one
+scheduler pass, and it does not scale with the size of the request: on Hive, `-c 1`, `-c 8`,
+`-c 16`, `-c 32` and `-c 48` all returned the identical timestamp while 1,551 CPUs sat idle in
+`high`, and that timestamp was over an hour and a half in the future. Use `--test-only` for one
+thing only — whether the scheduler accepts the request. Reading it as a queue depth is how a user
+ends up believing the cluster is congested and running their work on a login node instead.
+
 ## The job ended badly
 
 | `sacct` State / evidence | Cause | Fix |
@@ -98,12 +120,30 @@ node` is not allowed.
 
 ## Login node problems
 
-Per-user caps on login nodes: 2 CPUs, 7.5% of RAM, 500 MB swap, 512 processes, 16384 open
-files. Symptoms: processes vanish silently (OOM), `Too many open files`, `fork: retry: Resource
-temporarily unavailable`. Count processes with `pgrep --count --uid $USER`; move the work into
-`srun --pty bash`. Staff kill offending processes, and jobs that hammer a shared file system can
-get an account locked. The fix is always to run the work in a job and wait for it, never to
-shrink or stagger it until it squeezes under the caps — see *Login-node discipline* in `SKILL.md`.
+Per-user caps on login nodes: 2 CPUs (`CPUQuota=200%`), 7.5% of RAM, 500 MB swap, 512 processes,
+and 16,384 open files. Symptoms: processes vanish silently (OOM), `Too many open files`,
+`fork: retry: Resource temporarily unavailable`. Count processes with `pgrep --count --uid $USER`;
+move the work into `srun --pty bash`. Staff kill offending processes, and jobs that hammer a shared
+file system can get an account locked. The fix is always to run the work in a job and wait for it,
+never to shrink or stagger it until it squeezes under the caps — see *Login-node discipline* in
+`SKILL.md`.
+
+**Who is capped, and how to check.** PAM runs `/etc/security/systemd-user-limits.sh` at each login
+(wired in `/etc/pam.d/common-session`). It skips system accounts (UID < 1000), skips — and actively
+removes limits for — members of **`hpccfgrp`**, and for everyone else applies
+`CPUQuota=200% MemoryMax=7.5% MemorySwapMax=500M TasksMax=512` to that user's slice. So:
+
+```bash
+cat /etc/security/systemd-user-limits.sh          # the authoritative current values
+grep nofile /etc/security/limits.d/slurm.conf     # the open-file limit (set separately)
+id -nG | grep -qw hpccfgrp && echo "exempt (staff)" || echo "capped"
+ls /etc/systemd/system.control/user-$(id -u).slice.d/   # the drop-in, absent when exempt
+systemctl show "user-$(id -u).slice" -p CPUQuotaPerSecUSec -p MemoryMax -p TasksMax
+```
+
+If a user reports being throttled, confirm with the last two commands. If *you* are exempt because
+you are running as staff, the caps still apply to the person you are helping — never generalise
+from your own slice to "there are no limits here".
 
 A related self-inflicted case: `sinfo`/`sbatch`/`sacct: command not found` in a non-interactive
 shell or after `module purge`. The commands are always at

@@ -121,8 +121,17 @@ if [ $NOTEST = 0 ]; then
   if command -v sbatch >/dev/null 2>&1; then
     echo "sbatch --test-only $F:"
     out=$(timeout 30 sbatch --test-only "$F" 2>&1); rc=$?
-    sed 's/^/   /' <<<"$out"
-    if [ $rc -ne 0 ] || grep -qiE 'error|failure|invalid' <<<"$out"; then ERR=$((ERR+1)); echo "   -> the scheduler rejects this request; see references/debugging.md for the message"; else echo "   -> accepted (estimated start above; nothing was submitted)"; fi
+    # Strip the "to start at ..." clause: it is a scheduler-pass artifact, not a queue-wait
+    # estimate (identical for 1 and 48 CPUs, often hours ahead of an idle partition), and
+    # readers who mistake it for a wait time talk themselves into using the login node.
+    sed -E 's/ to start at [^ ]+ [a-z]? ?using/ accepted, using/' <<<"$out" | sed 's/^/   /'
+    if [ $rc -ne 0 ] || grep -qiE 'error|failure|invalid' <<<"$out"; then
+      ERR=$((ERR+1)); echo "   -> the scheduler rejects this request; see references/debugging.md for the message"
+    else
+      echo "   -> accepted; nothing was submitted."
+      echo "      (--test-only reports no usable start time; for queue health use"
+      echo "       sinfo -p ${PART:-PARTITION} -h -o '%C'  and  squeue -t PD -h -o '%r' | sort | uniq -c)"
+    fi
   else
     echo "sbatch not available here; validate on the cluster with: sbatch --test-only $F"
   fi

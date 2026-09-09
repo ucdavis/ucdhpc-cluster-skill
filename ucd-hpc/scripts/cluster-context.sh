@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# ucd-hpc: one-shot, read-only snapshot of the cluster and the current user's access.
+# Safe on a login node (only cheap Slurm/df queries). Exits 0 with a notice when off-cluster.
+#
+# Usage: cluster-context.sh [--brief]
+set -u
+BRIEF=0; [ "${1:-}" = "--brief" ] && BRIEF=1
+T() { timeout 25 "$@" 2>/dev/null; }
+hr() { printf '\n== %s ==\n' "$1"; }
+
+# --- which cluster -----------------------------------------------------------
+CLUSTER=""
+if [ -r /opt/hpccf/etc/cluster_name.conf ]; then
+  CLUSTER=$(. /opt/hpccf/etc/cluster_name.conf 2>/dev/null; echo "${CLUSTER_NAME:-}")
+fi
+# Slurm lives at a fixed path on all three clusters; never search for it.
+SLURM_BIN=/cvmfs/hpc.ucdavis.edu/sw/spack/environments/core/view/generic/slurm/bin
+if ! command -v sinfo >/dev/null 2>&1; then
+  # non-login shells may lack the slurm module
+  if [ -r /etc/profile.d/modules.sh ]; then
+    # `set -u` must be off here: modules.sh dereferences unset variables and would abort us.
+    set +u
+    # shellcheck disable=SC1091
+    source /etc/profile.d/modules.sh >/dev/null 2>&1 || true
+    set -u
+  fi
+  if ! command -v sinfo >/dev/null 2>&1 && [ -d "$SLURM_BIN" ]; then
+    PATH="$SLURM_BIN:$PATH"
+  fi
+fi
+[ -z "$CLUSTER" ] && CLUSTER=$(T scontrol show config | awk '/^ClusterName/{print $3}')
+if [ -z "$CLUSTER" ] || ! command -v sinfo >/dev/null 2>&1; then
+  cat <<EOF
+NOT ON A UC DAVIS HPC LOGIN NODE (host: $(hostname -f 2>/dev/null || hostname)).
+Live probing is unavailable. Use references/<cluster>.md and ask the user to run, on the cluster:
+  sacctmgr show assoc user=\$USER format=account%20,partition%20,qos%40
+  /opt/hpccf/bin/slurm-show-resources.py
+EOF
+  exit 0
+fi
+
+hr "cluster"
+echo "cluster=$CLUSTER  host=$(hostname -f 2>/dev/null || hostname)  user=$USER  slurm=$(T sinfo --version | awk '{print $2}')  date=$(date -Is)"
+echo "reference: references/${CLUSTER}.md"
+
+# --- the user's access --------------------------------------------------------
+hr "accounts / partitions / QOS for $USER (⁺ = default account)"
+if [ -x /opt/hpccf/bin/slurm-show-resources.py ]; then
+  T /opt/hpccf/bin/slurm-show-resources.py | sed '/^$/d'
+else
+  T sacctmgr show assoc user="$USER" format=account%20,partition%20,qos%40
+fi
+
+hr "QOS limits: MaxTRES = per job, GrpTRES = whole account pool, MaxTRESPU = per user"
+QOS=$(T sacctmgr show assoc user="$USER" format=qos -Pn | sort -u | paste -sd, -)
+if [ -n "$QOS" ]; then
+  T sacctmgr show qos "$QOS" format=name%36,maxtres%40,grptres%40,maxtrespu%30,maxwall -P \
+    | awk -F'|' 'NR==1{print; next} {printf "%s|%s|%s|%s|%s\n",$1,($2==""?"-":$2),($3==""?"-":$3),($4==""?"-":$4),($5==""?"-":$5)}' \
+    | column -t -s'|'
+fi
+
+hr "maintenance reservations (jobs whose --time reaches into one wait as ReqNodeNotAvail)"
+T scontrol show reservation | awk '/ReservationName/{n=$1} /StartTime/{print n, $1, $2} ' | sed 's/ReservationName=//' | head -5
+[ -z "$(T scontrol show reservation)" ] && echo "none"
+
+# --- partitions ----------------------------------------------------------------
+hr "partitions: max time, default mem per CPU, preemption, nodes alloc/idle/other/total, GPUs"
+printf '%-20s %-12s %-10s %-10s %-16s %s\n' PARTITION MAXTIME DEFMEM/CPU PREEMPT NODES_A/I/O/T GRES_TYPES
+for p in $(T sinfo -h -o "%R" | sort -u); do
+  info=$(T scontrol show partition "$p")
+  mt=$(grep -oE 'MaxTime=[^ ]+' <<<"$info" | cut -d= -f2)
+  dm=$(grep -oE 'DefMemPerCPU=[^ ]+' <<<"$info" | cut -d= -f2)
+  pm=$(grep -oE 'PreemptMode=[^ ]+' <<<"$info" | cut -d= -f2)
+  nodes=$(T sinfo -h -s -p "$p" -o "%F")
+  gres=$(T sinfo -h -p "$p" -o "%G" | grep -v '(null)' | sed -E 's/gpu:([^:(]+):?[0-9]*(\([^)]*\))?/\1/; s/\(S:[^)]*\)//g' | sort -u | paste -sd, -)
+  printf '%-20s %-12s %-10s %-10s %-16s %s\n' "$p" "${mt:-?}" "${dm:+${dm}M}" "${pm:-?}" "${nodes:-?}" "${gres:--}"
+done
+
+hr "GPU inventory (sinfo GRES string | node count) — use --gpus=TYPE:N or --gpus=N"
+T sinfo -h -o "%G|%D" | grep -v '(null)' | sort | awk -F'|' '{a[$1]+=$2} END{for(k in a) print k"|"a[k]}' | sort | column -t -s'|'
+
+if [ "$BRIEF" = 0 ]; then
+  hr "node shapes (features | CPUs | RAM MB | count)"
+  T sinfo -h -N -o "%f|%c|%m" | sort | uniq -c | sort -rn | awk '{printf "%s x %s\n",$1,$2}' | head -15 | column -t -s'|'
+fi
+
+# --- the queue ------------------------------------------------------------------
+hr "my jobs"
+Q=$(T squeue --me -o "%.10i %.16P %.20j %.3t %.11M %.11l %.5C %.9m %R")
+[ -n "$(sed -n 2p <<<"$Q")" ] && echo "$Q" || echo "none queued or running"
+
+# --- storage ----------------------------------------------------------------------
+hr "storage"
+echo "home (20 GB quota per user; on Farm/Franklin df shows the shared server, so use du -sh ~):"; T df -h "$HOME" | tail -1 | awk '{printf "  %s used of %s (%s) on %s\n",$3,$2,$5,$6}'
+for g in $(id -Gn); do
+  for base in /quobyte /group; do
+    d="$base/$g"
+    if [ -d "$d" ]; then
+      echo "group share: $d"
+      T df -h "$d" | tail -1 | awk '{printf "  %s used of %s (%s)\n",$3,$2,$5}'
+      if command -v qinfo >/dev/null 2>&1 && [ "$base" = /quobyte ]; then
+        q=$(T qinfo quota "$d" | head -4 | sed 's/^/  /'); [ -n "$q" ] && echo "$q"
+      fi
+      [ -d "$d/BACKED-UP" ] && echo "  has BACKED-UP/ (only that directory is backed up)"
+    fi
+  done
+done
+case "$CLUSTER" in
+  hive) [ -d /nfs/hive/scratch ] && echo "network scratch: /nfs/hive/scratch (shared, not purged, not backed up)";;
+esac
+echo "per-job local scratch: \$TMPDIR=/tmp (private, deleted at job end)"
+
+# --- software --------------------------------------------------------------------
+hr "software"
+if ! type module >/dev/null 2>&1 && [ -r /etc/profile.d/modules.sh ]; then
+  set +u   # modules.sh dereferences unset variables
+  # shellcheck disable=SC1091
+  source /etc/profile.d/modules.sh >/dev/null 2>&1 || true
+  set -u
+fi
+if type module >/dev/null 2>&1; then
+  echo "module trees:"; tr ':' '\n' <<<"${MODULEPATH:-}" | sed 's/^/  /'
+  n=$(module -t avail 2>&1 | grep -vc ':$'); echo "modules available: ~$n  (module avail NAME / module search NAME)"
+  echo "conda: $(module -t avail conda/base 2>&1 | grep -m1 'conda/base' || echo 'module not found')  (central envs: module -t avail conda/)"
+  echo "python/R/cuda modules: $(module -t avail python R cuda 2>&1 | grep -E '^(python|R|cuda)/' | paste -sd' ' -)"
+else
+  echo "module command unavailable in this shell (source /etc/profile.d/modules.sh)"
+fi
+command -v apptainer >/dev/null 2>&1 && echo "apptainer: $(apptainer --version 2>/dev/null)"
+echo "OnDemand: https://ondemand.${CLUSTER}.hpc.ucdavis.edu"

@@ -1,146 +1,90 @@
 # Software on HPC@UCD
 
-## The landscape
-
 | Mechanism | Farm & Hive | Franklin |
-|-----------|-------------|----------|
-| Spack-built modules | `/cvmfs/hpc.ucdavis.edu/sw/spack/modulefiles/main/.../{core,lang,general}` (identical on both) | `/share/apps/22.04/modulefiles/spack/{core,software}` |
-| Central conda environments | `/cvmfs/hpc.ucdavis.edu/sw/conda/modulefiles` (`conda/NAME/VERSION`, `R/VERSION`) | `/share/apps/franklin/modulefiles` (`conda/NAME/VERSION`) |
-| Manually installed | `/cvmfs/hpc.ucdavis.edu/sw/modulefiles` (matlab, fsl, phenix) | same CVMFS tree is mounted |
-| Containers | `module load apptainer` (also `/usr/bin/apptainer`) | same |
-| Web apps | Open OnDemand: JupyterLab, RStudio Server, VS Code, desktop | same |
+|---|---|---|
+| Spack modules | `/cvmfs/hpc.ucdavis.edu/sw/spack/modulefiles/main/.../{core,lang,general}` (identical on both) | `/share/apps/22.04/modulefiles/spack/{core,software}` |
+| Central conda envs | `/cvmfs/hpc.ucdavis.edu/sw/conda/modulefiles` (`conda/NAME/VERSION`, `R/VERSION`) | `/share/apps/franklin/modulefiles` |
+| Hand-installed | `/cvmfs/hpc.ucdavis.edu/sw/modulefiles` (matlab, fsl, phenix) | same tree mounted |
+| Containers / web | `module load apptainer`; Open OnDemand (JupyterLab, RStudio, VS Code, desktop) | same |
 
-Everything is Environment Modules (`envmod` 5.x), even on Franklin (its docs say lmod; the
-commands are identical). Release notes for the CVMFS tree:
-`/cvmfs/hpc.ucdavis.edu/sw/RELEASES.md`. Check before asserting anything exists:
+Everything is Environment Modules 5.x (Franklin's docs say lmod; the commands are the same).
+Release notes: `/cvmfs/hpc.ucdavis.edu/sw/RELEASES.md`. Look before asserting:
 
 ```bash
-module avail NAME          # exact or prefix match
-module search NAME         # searches descriptions too
-module -t avail conda/     # central conda environments
-module whatis NAME         # one-line description
-module show NAME/VERSION   # what it changes (PATH, LD_LIBRARY_PATH, $NAME_ROOT ...)
+module avail NAME | module search NAME | module -t avail conda/ | module whatis NAME | module show NAME/VERSION
 ```
 
 ## Module naming
 
-- `name/version` with `(default)` marking what a bare `module load name` gives you.
-- **Compiler suffix** (CVMFS): `hdf5/1.14.5%oneapi@2025.0.0` was built with Intel oneAPI; the
-  unsuffixed module is the GCC 13.2 build. Mixing compilers within one job usually breaks links.
-- **MPI variants**: `hpl/2.3+openmpi-5.0.5` vs `+mpich-4.3.2`; load the matching MPI.
-- **Franklin arch variants**: `ctffind/4.1.14+amd` (default, AMD nodes), `+intel` (only for
-  the Intel RTX 2080 Ti nodes), unsuffixed = generic x86-64-v3. `+amd` binaries fail on Intel
-  nodes and vice versa.
-- **Nested names**: `relion/gpu/4.0.1+amd`, `conda/pytorch/2.9.1`: load at least
-  `name/variant` (`module load relion/gpu`); `module load relion` alone fails.
-- **Extra trees** (CVMFS): `module load dev` exposes pre-release software (may change or break);
-  `module load zen2` exposes AMD-optimized builds (AOCC, amdblis/libflame, openmpi) for
-  zen2 nodes; pair with `--constraint=zen2`.
-- Every module sets `$<NAME>_ROOT` to its install prefix, useful for `-I`/`-L` flags.
+- `name/version`, with `(default)` marking what a bare `module load name` gives.
+- Compiler suffix on CVMFS: `hdf5/1.14.5%oneapi@2025.0.0` is the Intel build; unsuffixed is GCC 13.2.
+  Do not mix compilers in one job. MPI variants: `+openmpi-5.0.5` vs `+mpich-4.3.2`.
+- Franklin arch variants: `+amd` (default, AMD nodes), `+intel` (the RTX 2080 Ti nodes only),
+  unsuffixed = generic. The wrong one fails with `Illegal instruction`.
+- Nested names need at least `name/variant`: `module load relion/gpu`, `conda/pytorch/2.9.1`.
+- Extra CVMFS trees: `module load dev` (pre-release, may break), `module load zen2` (AMD-optimized
+  builds; pair with `--constraint=zen2`). Every module sets `$<NAME>_ROOT`.
 
 ## Modules in job scripts
 
-The `module` command is a shell function defined by `/etc/profile.d/modules.sh`. Batch scripts
-submitted from zsh, cron, OnDemand, or with a scrubbed environment do not have it. Put this at
-the top of scripts:
-
-```bash
-source /etc/profile.d/modules.sh
-module load bwa/0.7.17 samtools/1.19.2
-```
-
-`#!/bin/bash -l` also works (sources `/etc/profile`). On Farm/Hive the profile purges modules
-then loads `slurm` and `openmpi`; `module purge` in a script therefore removes `srun` from PATH,
-so follow it with `module load slurm` when the script uses Slurm commands.
+`module` is a shell function from `/etc/profile.d/modules.sh`; scripts submitted from zsh, cron,
+OnDemand, or a scrubbed environment do not have it. Start scripts with
+`source /etc/profile.d/modules.sh` (or `#!/bin/bash -l`), then `module load`. Two traps:
+`modules.sh` reads `$MANPATH` unguarded, so source it **before** `set -u` or wrap it in
+`set +u ... set -u`; and on Farm/Hive it purges then loads `slurm` and `openmpi`, so a later
+`module purge` removes `srun` — `module load slurm` again if the script needs it.
 
 ## Conda and Python
 
-- `module load conda` (loads `conda/base/latest`, a miniforge install with `mamba`, and does
-  the `conda init` shell hook for you). Never run `conda init` or install Miniconda/Anaconda
-  in `$HOME`; a private install clashes with the central one, breaks RStudio/Jupyter in
-  OnDemand (`ERROR: CONDA_EXE is currently defined`), and is unsupported. To migrate, delete the
-  `# >>> conda initialize >>>` block from `~/.bashrc`/`~/.bash_profile`/`~/.zshrc`, log out and in.
-- Environments go on **group storage**, not the 20 GB home:
+- `module load conda` (miniforge with `mamba`; does the shell hook for you). Never `conda init` or
+  install Miniconda in `$HOME`: it clashes with the central install and breaks OnDemand
+  (`ERROR: CONDA_EXE is currently defined`). Migration = delete the `# >>> conda initialize >>>`
+  block from the shell rc and log in again.
+- Environments and caches go on group storage, not the 20 GB home:
 
   ```bash
   module load conda
-  mamba create --prefix /quobyte/PIGRP/$USER/envs/myenv python=3.12 numpy pandas   # Hive
-  mamba create --prefix /group/PIGRP/$USER/envs/myenv ...                            # Farm/Franklin
-  conda activate /quobyte/PIGRP/$USER/envs/myenv
+  conda config --add envs_dirs /quobyte/PIGRP/$USER/envs     # /group/PIGRP/... on Farm/Franklin
+  conda config --add pkgs_dirs /quobyte/PIGRP/$USER/conda-pkgs
+  conda create --no-default-packages -n myenv python=3.12 scanpy jupyterlab ipykernel
+  conda clean --all                                           # reclaim the old home cache
   ```
 
-  Register the directory so names work: `conda config --add envs_dirs /quobyte/PIGRP/$USER/envs`.
-  Move the package cache too: `conda config --add pkgs_dirs /quobyte/PIGRP/$USER/conda-pkgs`,
-  and reclaim space with `conda clean --all`.
-- Big solves (tensorflow, bioinformatics stacks) exceed login-node limits; run them in
-  `srun --account=A --partition=P --time=1:00:00 --cpus-per-task=2 --mem=16G --pty bash -l`.
-- `mamba` prints harmless lock-file warnings on shared caches, and on Franklin a
-  `MAMBA_ROOT_PREFIX` warning; both can be ignored.
-- Central environments: `module load conda/pytorch/2.9.1` = `module load conda` +
-  `conda activate pytorch-2.9.1`. `conda env list` shows them. Unloading `conda` deactivates
-  everything.
-- `pip install` inside an activated conda env is fine; `pip install --user` lands in
-  `~/.local` and eats home quota. Plain `module load python/3.11.9` + `python -m venv` is an
-  alternative for pure-Python work.
+  `--no-default-packages` matters: the site `.condarc` sets `create_default_packages: gcc=13`,
+  so every env otherwise pulls a GCC toolchain. `conda` accepts the flag; `mamba` 2.0.5 rejects it.
+- Solves of large environments exceed login-node limits: do them in
+  `srun -A ACC -p PART -t 1:00:00 -c 2 --mem=16G --pty bash -l`.
+- Central envs: `module load conda/pytorch/2.9.1` = `module load conda` + `conda activate` of that
+  env. **Verify what you got** (`python -c "import torch; print(torch.__version__)"`); a
+  modulefile's `_conda_envname` (shown by `module show`) can point at a different version than its
+  name, and any env under `/cvmfs/hpc.ucdavis.edu/sw/conda/environments/` can be activated by path.
 - In job scripts: `source /etc/profile.d/modules.sh; module load conda; conda activate ENV`.
-  (`conda activate` works after the module; `source activate` is obsolete.)
+  `pip install` inside an active env is fine; `pip install --user` fills `~/.local`.
+  `module load python/3.11.9` + `venv` is the conda-free alternative.
+- `mamba` prints harmless lock-file warnings (and `MAMBA_ROOT_PREFIX` on Franklin).
 
-## R and RStudio
+## R, Jupyter, Apptainer
 
-`module load R/4.4.2` (conda-based R on CVMFS; `R/4.3.3` also present). RStudio Server runs
-through Open OnDemand; pick the R version in the form. User libraries default to
-`~/R/x86_64-pc-linux-gnu-library/4.4`; point `R_LIBS_USER` at group storage in `~/.Renviron` if
-home fills up. Session problems (version-change errors, `install.packages()` failing) are fixed
-by clearing `~/.RData` and `~/.local/share/rstudio*` and disabling workspace restore.
-
-## Jupyter, VS Code, desktops
-
-Open OnDemand at `https://ondemand.<cluster>.hpc.ucdavis.edu` launches JupyterLab (choose a
-conda env; the name must exist in `conda env list`), RStudio Server, VS Code Server, and an
-XFCE desktop as Slurm jobs; the form's account/partition/CPUs/memory/hours map directly to
-`sbatch` flags and the same QOS limits apply. `module load conda/jupyterlab/4` exists for
-manual `jupyter lab --no-browser --ip=$(hostname)` inside an `srun` session with an SSH tunnel.
-
-## Apptainer (Singularity)
-
-```bash
-module load apptainer
-export APPTAINER_CACHEDIR=/quobyte/PIGRP/$USER/apptainer-cache   # keeps ~/.apptainer small
-apptainer build tf.sif docker://tensorflow/tensorflow:latest-gpu   # once, ideally in an srun session
-apptainer exec --nv tf.sif python train.py                          # --nv exposes the granted GPU(s)
-apptainer shell tf.sif
-export APPTAINER_BIND=/quobyte/PIGRP,/nfs/hive/scratch               # extra paths inside the container
-```
-
-Home and the current directory are bound automatically. Docker itself is not available (no
-root); any OCI image works through Apptainer. Build `.sif` files once and reuse them, not in
-every job.
+- `module load R/4.4.2` (or `R/4.3.3`). RStudio Server runs via OnDemand; user libraries default to
+  `~/R/...` — set `R_LIBS_USER` in `~/.Renviron` to group storage if home fills.
+- OnDemand JupyterLab takes a conda env name that must appear in `conda env list` (registering
+  `envs_dirs` makes a prefix env show by name); a kernel registered with
+  `python -m ipykernel install --user --name ENV` also appears in the picker. Form fields map to
+  `sbatch` flags and the same QOS caps apply.
+- Apptainer: `module load apptainer`; `export APPTAINER_CACHEDIR=/quobyte/PIGRP/$USER/apptainer-cache`
+  (keeps `~/.apptainer` small); `apptainer build img.sif docker://IMAGE` once, in a job;
+  `apptainer exec --nv img.sif CMD` for GPUs; `APPTAINER_BIND=/quobyte/PIGRP,...` for extra paths.
+  No Docker daemon; any OCI image works this way.
 
 ## Compilers, MPI, CUDA
 
-Defaults loaded at login (Farm/Hive): `slurm/26-05-4-1`, `openmpi/5.0.5`. Available:
-`gcc/13.2.0` (default), `gcc/11.4.0`, `gcc/9.5.0`, `aocc/5.0.0`, `clang/19.1.3`,
-`oneapi/2025.0.0`, `nvhpc/24.9`, `cuda/13.3.0` (default) plus 12.6, 12.3, 11.x; `mpich/4.3.2`;
-`intel-oneapi-mkl`, `amdfftw`, `fftw`, `hdf5`, `netcdf-*`, `boost`, `eigen`, `cmake/3.28.1`.
-Franklin: `gcc/13.2.0`, `aocc/4.1.0`, `intel-oneapi-compilers/2023.2.1`, `cuda/11.7.1`,
-`openmpi/4.1.5{,+amd,+intel}`. CUDA modules are for compiling; GPU nodes carry the driver.
-Build on a compute node of the target architecture when using `-march=native`.
-
-## Cluster-specific software notes
-
-- **Franklin** (cryo-EM/structural biology): `relion/{cpu,gpu}/VERSION+arch` with `relion-helper`
-  for switching versions inside a project (GUI needs `ssh -Y`); `alphafold/2.3.2` with the
-  `alphafold-wrapped` script that fills in `--*_database_path` from `$ALPHAFOLD_DB_ROOT`
-  (`/share/databases/alphafold`); conda envs `cryolo`, `topaz`, `cryodrgn`, `deepemhancer`,
-  `pyem`, `warp`, `scipion`; databases in `/share/databases/{alphafold,blast,relion,cryolo,...}`.
-- **Hive/Farm** (CVMFS general tree): broad bioinformatics (bwa, bwa-mem2, bowtie2, star,
-  salmon, samtools, bcftools, gatk, blast-plus, diamond, kraken2, spades, canu, busco, ...),
-  physics/chemistry (gromacs, lammps, quantum-espresso, amber/26+cuda, gaussian/16, geant4,
-  root), climate/geo (cdo, nco, gdal, gmt), `alphafold/2.3.2`, `relion/5.0.0`, `matlab/r2024a`,
-  `julia/1.12.1`, `rust`, `go`, `rstudio`, `code-server`.
+Loaded at login on Farm/Hive: `slurm`, `openmpi/5.0.5`. Defaults: `gcc/13.2.0`, `cuda/13.3.0`,
+`oneapi/2025.0.0`, `nvhpc/24.9`, `aocc/5.0.0`; also `mpich/4.3.2`, MKL, FFTW, HDF5, NetCDF, Boost.
+Franklin: `gcc/13.2.0`, `cuda/11.7.1`, `openmpi/4.1.5{,+amd,+intel}`. CUDA modules are for
+building; GPU nodes carry the driver. `-march=native` builds belong on a node of the target type.
 
 ## Requesting software
 
-Read <https://hpc.ucdavis.edu/software-installation-policy> and submit the request form linked
-there. Packages already in Spack (<https://packages.spack.io>) or conda-forge/bioconda are
-approved fastest. Meanwhile users can self-serve with conda on group storage or Apptainer.
+Read <https://hpc.ucdavis.edu/software-installation-policy> and use the linked form; packages
+already in Spack or conda-forge/bioconda are approved fastest. Meanwhile: conda on group storage,
+or Apptainer.

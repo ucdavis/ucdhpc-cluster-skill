@@ -45,14 +45,19 @@ refseq_protein, swissprot, pdb, 16S/18S/28S, ...; weekly), `relion`, `cryolo`, `
 Environment Modules 5.5 (docs say lmod; same commands). Trees: `/share/apps/22.04/modulefiles/spack/core`
 (gcc 7.5/11.4/13.2, aocc/4.1.0, intel-oneapi-compilers/2023.2.1, cuda 8.0/11.2/11.7,
 openmpi/4.1.5{,+amd,+intel}, slurm), `.../spack/software` (`+amd`/`+intel` variants),
-`/share/apps/franklin/modulefiles` (conda envs), plus CVMFS `sw/modulefiles`. Loaded at login:
+`/share/apps/franklin/modulefiles` (matlab, sbgrid, scipion), plus CVMFS `sw/modulefiles` and
+`sw/conda/modulefiles`. Loaded at login:
 `slurm`, `openmpi/default`, `ucx`.
 
 - **Relion**: `relion/{cpu,gpu}/4.0.1+amd`, `relion/gpu/4.0.1+intel`, 3.1.3 and 5.0-beta variants;
   `module load relion/gpu` for the default. The GUI (`ssh -Y`) submits Slurm jobs itself; switch
-  versions inside a project only with `relion-helper` (`conda/relion-helper`).
+  versions inside a project only with `relion-helper` (`module load conda; conda activate relion-helper`).
 - **AlphaFold**: `module load alphafold/2.3.2`, then `alphafold-wrapped --output_dir=... --fasta_paths=...
   --max_template_date=... --use_gpu_relax=true` (fills the database paths). GPU node required.
-- **Cryo-EM conda envs**: `conda/{cryolo,topaz,cryodrgn,deepemhancer,pyem,warp,scipion,sphire,gpu-isac,spisonet,medic}`;
-  also `motioncor2`, `ctffind/4.1.14+amd|+intel`, `gctf`. `module load conda` for the central
-  miniforge (its `MAMBA_ROOT_PREFIX` warning is harmless).
+- **Conda**: `module load conda` is the same central CVMFS miniforge as Farm and Hive (same
+  `.condarc`, `conda/*` modules, rules in `software.md`). Cryo-EM envs have no modules; activate
+  them by name (`conda env list`). `envs_dirs` searches CVMFS first, so `cryodrgn`,
+  `deepemhancer-0.16`, `medic-1.0`, `pyem`, `relion-5.0`, `relion-helper` resolve to CVMFS
+  copies; `cryolo-1.9.3-cuda-11`, `gpu-isac-2.3.4`, `sphire-2.91`, `spisonet`, `warp`, `scipion3`,
+  `alphafold-2.3.2` exist only in the old `/share/apps/conda/environments`. Modules: `conda/topaz`,
+  `motioncor2`, `ctffind/4.1.14+amd|+intel`, `gctf`, `scipion/3.0.12`, `sbgrid`.

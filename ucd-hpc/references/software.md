@@ -3,7 +3,7 @@
 | Mechanism | Farm & Hive | Franklin |
 |---|---|---|
 | Spack modules | `/cvmfs/hpc.ucdavis.edu/sw/spack/modulefiles/main/.../{core,lang,general}` (identical on both) | `/share/apps/22.04/modulefiles/spack/{core,software}` |
-| Central conda envs | `/cvmfs/hpc.ucdavis.edu/sw/conda/modulefiles` (`conda/NAME/VERSION`, `R/VERSION`) | `/share/apps/franklin/modulefiles` |
+| Central conda + envs | `/cvmfs/hpc.ucdavis.edu/sw/conda/modulefiles` (`conda`, `conda/NAME/VERSION`, `R/VERSION`) | same CVMFS tree; older cryo-EM envs in `/share/apps/conda/environments` (activate by name) |
 | Hand-installed | `/cvmfs/hpc.ucdavis.edu/sw/modulefiles` (matlab, fsl, phenix) | same tree mounted |
 | Containers / web | `module load apptainer`; Open OnDemand (JupyterLab, RStudio, VS Code, desktop) | same |
 
@@ -36,32 +36,52 @@ OnDemand, or a scrubbed environment do not have it. Start scripts with
 
 ## Conda and Python
 
-- `module load conda` (miniforge with `mamba`; does the shell hook for you). Never `conda init` or
-  install Miniconda in `$HOME`: it clashes with the central install and breaks OnDemand
+- `module load conda` (miniforge: conda 25.1, `mamba` 2.0.5; does the shell hook for you). It is
+  the same CVMFS install on all three clusters. Never `conda init` or install Miniconda in
+  `$HOME`: it clashes with the central install and breaks OnDemand
   (`ERROR: CONDA_EXE is currently defined`). Migration = delete the `# >>> conda initialize >>>`
   block from the shell rc and log in again.
+- The conda module conflicts with `gcc`, `oneapi`, `aocc`, `nvhpc`: a later `module load gcc`
+  silently unloads conda, so an env's compiler has to come from the env itself.
 - Environments and caches go on group storage, not the 20 GB home:
 
   ```bash
   module load conda
   conda config --add envs_dirs /quobyte/PIGRP/$USER/envs     # /group/PIGRP/... on Farm/Franklin
   conda config --add pkgs_dirs /quobyte/PIGRP/$USER/conda-pkgs
-  conda create --no-default-packages -n myenv python=3.12 scanpy jupyterlab ipykernel
+  mamba create -n myenv python=3.12 scanpy jupyterlab ipykernel
   conda clean --all                                           # reclaim the old home cache
   ```
 
-  `--no-default-packages` matters: the site `.condarc` sets `create_default_packages: gcc=13`,
-  so every env otherwise pulls a GCC toolchain. `conda` accepts the flag; `mamba` 2.0.5 rejects it.
+- Default packages: the site `.condarc` sets `create_default_packages: gcc=13`, so
+  `conda create` adds a GCC 13 toolchain (~75 MB) to every env, ready for pip/R source builds.
+  `conda create --no-default-packages` skips it. `mamba create` (what the docs recommend)
+  ignores the setting and rejects that flag; add `gcc=13` to the spec when an env will compile.
 - Solves of large environments exceed login-node limits: do them in
   `srun -A ACC -p PART -t 1:00:00 -c 2 --mem=16G --pty bash -l`.
 - Central envs: `module load conda/pytorch/2.9.1` = `module load conda` + `conda activate` of that
   env. **Verify what you got** (`python -c "import torch; print(torch.__version__)"`); a
   modulefile's `_conda_envname` (shown by `module show`) can point at a different version than its
-  name, and any env under `/cvmfs/hpc.ucdavis.edu/sw/conda/environments/` can be activated by path.
+  name. `envs_dirs` already lists `/cvmfs/hpc.ucdavis.edu/sw/conda/environments/` (then, on
+  Franklin, `/share/apps/conda/environments/`), so `conda activate NAME` works for every central
+  env, with or without a module; `conda env list` shows them.
+- **Never `pip install` into a central env.** It is read-only CVMFS, so pip silently falls back to
+  `~/.local/lib/pythonX.Y/site-packages`. That fills home, shadows packages in *every* env of that
+  Python version, and causes import errors later. To add packages to a central env, layer a venv:
+
+  ```bash
+  module load conda/pytorch/2.9.1
+  python -m venv --system-site-packages /quobyte/PIGRP/$USER/venvs/torch-extra   # /group/... on Farm/Franklin
+  source /quobyte/PIGRP/$USER/venvs/torch-extra/bin/activate && pip install PKG
+  ```
+
+  In jobs, load the same module, then `source .../bin/activate`. The venv breaks if that
+  central env changes, so recreate it then. Otherwise build your own env. `pip install` is fine
+  inside an env you created; avoid `pip install --user` (same `~/.local` problem).
+  `export PYTHONNOUSERSITE=1` hides an existing `~/.local` that is shadowing packages.
 - In job scripts: `source /etc/profile.d/modules.sh; module load conda; conda activate ENV`.
-  `pip install` inside an active env is fine; `pip install --user` fills `~/.local`.
   `module load python/3.11.9` + `venv` is the conda-free alternative.
-- `mamba` prints harmless lock-file warnings (and `MAMBA_ROOT_PREFIX` on Franklin).
+- `mamba` prints harmless `Cache file ... was modified by another program` warnings.
 
 ## R, Jupyter, Apptainer
 

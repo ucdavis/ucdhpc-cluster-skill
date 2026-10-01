@@ -88,11 +88,15 @@ residual trust requirement.
    not run on the Blackwell GPUs that `publicgrp/high` can assign.
 5. **The site `.condarc` sets `create_default_packages: gcc=13`**, so every `conda create` silently
    pulls a GCC 13 toolchain. `conda create` accepts `--no-default-packages`; `mamba` 2.0.5 rejects it.
+   *Rechecked 2026-10-01: not a defect.* `mamba create`, which the docs recommend, ignores
+   `create_default_packages` entirely, so only `conda create` adds the toolchain. And because the
+   `conda` module conflicts with the `gcc`/`oneapi`/`aocc`/`nvhpc` modules, this default gives
+   each env a compiler. The skill now describes it as site behaviour.
 
 Items 1 and 2 are now fixed in the skill (commit following the iteration-2 record); the caps are
 described as policy with the `hpccfgrp` exemption and `/etc/security/systemd-user-limits.sh` named
 as the authoritative source, and `lint-jobscript.sh` no longer prints the `--test-only` start time
-at all. Items 4 and 5 remain open — see `ucd-hpc-workspace/NOTES.md`.
+at all. Item 4 remains open (item 5 was withdrawn on recheck) — see `ucd-hpc-workspace/NOTES.md`.
 
 **The iteration-2 numbers describe the skill as it stood before those two fixes.** Re-running
 iteration 2 against the current skill would be expected to change nothing measurable: eval-6 passed

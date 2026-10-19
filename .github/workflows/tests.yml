@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: script tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-22.04 matches the clusters (bash 5.1); ubuntu-24.04 has bash 5.2 (patsub_replacement);
+        # macos has bash 3.2 and BSD tools, which the tests are written to support.
+        os: [ubuntu-22.04, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tool versions
+        run: |
+          bash --version | head -1
+          command -v column fold awk sed
+      - name: Run tests
+        run: bash tests/run.sh
